@@ -52,7 +52,6 @@ jobs:
         export PATH=/usr/local/go/bin:$PATH
         go version
 
-
     - name: Clone source code
       working-directory: /workdir
       run: |
@@ -69,6 +68,12 @@ jobs:
 
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
+
+    - name: Replace golang package
+      run: |
+        cd openwrt
+        rm -rf feeds/packages/lang/golang
+        git clone https://github.com/kenzok8/golang feeds/packages/lang/golang
 
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a

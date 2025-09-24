@@ -1,7 +1,3 @@
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# Build OpenWrt using GitHub Actions (No Release)
-#
 name: OpenWrt Builder
 
 on:
@@ -26,36 +22,36 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@main
 
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
+        sudo docker image prune --all --force || true
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git \
-          gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool \
-          lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
-          python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
-          vim wget xmlto xxd zlib1g-dev
-        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq install \
+          ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl \
+          device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool \
+          libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+          libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp \
+          ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools \
+          qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        # 这条在某些 runner 上会返非0，忽略即可
+        sudo -E apt-get -qq autoremove --purge || true
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+        sudo mkdir -p /workdir && sudo chown $USER:$GROUPS /workdir
 
-        # === 关键1：安装 Go 1.25.x （给 host 用；即使不用也不碍事）===
+        # 安装 Go 1.26+（满足 xray-core 等要求）
+        GO_VERSION=1.26.2
         sudo rm -rf /usr/local/go /usr/bin/go /usr/lib/go-*
-        GO_VER=1.25.3
-        wget -q https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz
-        sudo tar -C /usr/local -xzf go${GO_VER}.linux-amd64.tar.gz
-        echo "export PATH=/usr/local/go/bin:\$PATH" >> ~/.bashrc
-        export PATH=/usr/local/go/bin:$PATH
-        go version
+        wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
+        sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
+        echo "/usr/local/go/bin" >> $GITHUB_PATH
+        echo "GOTOOLCHAIN=local" >> $GITHUB_ENV
+        /usr/local/go/bin/go version
 
     - name: Clone source code
       working-directory: /workdir
@@ -71,26 +67,11 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Replace golang package (Go 1.25+)
+    - name: Update & install feeds
       run: |
         cd openwrt
-        # === 关键2：用 sbwml 的 golang 回溯包替换官方 feeds ===
-        rm -rf feeds/packages/lang/golang
-        # 对 OpenWrt 23.05/24.10 用 24.x 分支；master 可用 25.x
-        git clone -b 24.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
-
-    - name: Prebuild golang host (required by xray-core/passwall2)
-      working-directory: openwrt
-      run: |
-        # === 关键3：先把 host 版 golang 编出来 ===
-        make package/golang/host/clean V=s || true
-        make package/golang/host/compile V=s -j"$(nproc)"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: Load custom configuration
       run: |
@@ -101,22 +82,20 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: Download package
-      id: package
       run: |
         cd openwrt
         make defconfig
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        find dl -size -1024c -exec ls -l {} \; -exec rm -f {} \;
 
     - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME || true
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
@@ -124,8 +103,8 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-    - name: Upload bin directory
-      uses: actions/upload-artifact@v4
+    - name: Upload bin directory (optional)
+      uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
@@ -133,15 +112,20 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+        # 只有编译成功且存在目标目录时才进入
+        if [ -d openwrt/bin/targets ]; then
+          cd openwrt/bin/targets/*/* || exit 0
+          rm -rf packages
+          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "No targets output."
+        fi
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}

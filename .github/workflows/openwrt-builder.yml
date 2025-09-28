@@ -1,3 +1,10 @@
+#
+# https://github.com/P3TERX/Actions-OpenWrt
+#
+# File: .github/workflows/openwrt-bulder.yml
+# Description: Build OpenWrt using GitHub Actions (no auto release)
+#
+
 name: OpenWrt Builder
 
 on:
@@ -6,14 +13,14 @@ on:
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6.git
-  REPO_BRANCH: openwrt-24.10-6.6
+  REPO_BRANCH:  openwrt-24.10-6.6
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
+  UPLOAD_RELEASE: false     # <--- 这里设为 false，关闭自动发布 Release
   TZ: Asia/Shanghai
 
 jobs:
@@ -22,140 +29,76 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
-
-    # ---- 缓存：dl 与工具链/构建目录（显著加速二次编译）----
-    - name: Cache downloads (dl)
-      uses: actions/cache@v4
-      with:
-        path: openwrt/dl
-        key: dl-${{ runner.os }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf*', '**/*.mk') }}
-        restore-keys: |
-          dl-${{ runner.os }}-${{ env.REPO_BRANCH }}-
-          dl-${{ runner.os }}-
-
-    - name: Cache toolchain & build_dir
-      uses: actions/cache@v4
-      with:
-        path: |
-          openwrt/staging_dir
-          openwrt/build_dir
-          openwrt/tmp
-        key: tc-${{ runner.os }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/.config') }}
-        restore-keys: |
-          tc-${{ runner.os }}-${{ env.REPO_BRANCH }}-
-          tc-${{ runner.os }}-
+      uses: actions/checkout@main
 
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
-        NEEDRESTART_MODE: a
       run: |
-        set -eux
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-        sudo docker image prune --all --force || true
-        sudo -E apt-get -yq update
-        sudo -E apt-get -yq install \
-          ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache \
-          cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf \
-          haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool \
-          lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
-          python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
-          vim wget xmlto xxd zlib1g-dev
-        sudo -E apt-get -yq autoremove --purge || true
-        sudo -E apt-get -yq clean || true
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir && sudo chown $USER:$GROUPS /workdir
-
-        # （可选）安装 Go 1.26.2，若不需要可注释掉以下 5 行
-        GO_VERSION=1.26.2
-        sudo rm -rf /usr/local/go /usr/bin/go /usr/lib/go-* || true
-        wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
-        sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
-        echo "/usr/local/go/bin" >> "$GITHUB_PATH"
-
-        # 编译加速
-        echo "MAKEFLAGS=-j$(nproc)" >> $GITHUB_ENV
-        echo "CCACHE_DIR=/workdir/.ccache" >> $GITHUB_ENV
-        echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
-        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
-        mkdir -p /workdir/.ccache
-
-    - name: Clean up disk space
-      run: |
-        set -eux
-        df -hT || true
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
-        sudo apt-get -y remove '^ghc-.*' '^dotnet-.*' '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' '^postgresql-.*' 'google-chrome-stable' '^libmono-.*' || true
-        sudo apt-get -y autoremove --purge || true
-        sudo apt-get -y clean || true
-        docker rmi $(docker images -q) || true
-        df -hT || true
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
     - name: Clone source code
       working-directory: /workdir
       run: |
-        set -eux
         df -hT $PWD
-        git clone --depth=1 -b "$REPO_BRANCH" "$REPO_URL" openwrt
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Load custom feeds
       run: |
-        set -eux
-        [ -e "${FEEDS_CONF}" ] && mv "${FEEDS_CONF}" openwrt/feeds.conf.default
-        chmod +x "${DIY_P1_SH}" || true
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
         cd openwrt
-        [ -x "$GITHUB_WORKSPACE/${DIY_P1_SH}" ] && "$GITHUB_WORKSPACE/${DIY_P1_SH}" || true
+        $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: Update & install feeds
-      run: |
-        set -eux
-        cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
 
     - name: Load custom configuration
       run: |
-        set -eux
         [ -e files ] && mv files openwrt/files
-        [ -e "${CONFIG_FILE}" ] && mv "${CONFIG_FILE}" openwrt/.config
-        chmod +x "${DIY_P2_SH}" || true
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_P2_SH
         cd openwrt
-        [ -x "$GITHUB_WORKSPACE/${DIY_P2_SH}" ] && "$GITHUB_WORKSPACE/${DIY_P2_SH}" || true
-        # 展示最终 .config（可审查选项是否生效）
-        [ -f .config ] && tail -n +1 .config | sed -n '1,200p' || true
+        $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: Download package
+      id: package
       run: |
-        set -eux
         cd openwrt
         make defconfig
         make download -j8
-        # 清理空/损坏下载
-        find dl -size -1024c -print -delete || true
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
       id: compile
       run: |
-        set -eux
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 三段式：多核 -> 失败退回单核详细输出
-        make -j"$(nproc)" || make -j1 V=s
-        echo "status=success" >> "$GITHUB_OUTPUT"
-        # 取设备名用于 Artifact 命名
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME || true
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> "$GITHUB_ENV"
-        echo "FILE_DATE=_$(date +\"%Y%m%d%H%M\")" >> "$GITHUB_ENV"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
 
-    - name: Upload bin directory (optional)
-      uses: actions/upload-artifact@v4
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
@@ -163,28 +106,42 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        set -eux
-        if [ -d openwrt/bin/targets ]; then
-          # 只取目标目录，避免把 packages 一起打包
-          cd openwrt/bin/targets/*/* || exit 0
-          rm -rf packages
-          echo "FIRMWARE=$PWD" >> "$GITHUB_ENV"
-          echo "status=success" >> "$GITHUB_OUTPUT"
-        else
-          echo "No targets output."
-        fi
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
+    # 已彻底关闭 Release 步骤
+    # - name: Generate release tag
+    #   id: tag
+    #   if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+    #   run: |
+    #     echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+    #     touch release.txt
+    #     [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
+    #     echo "status=success" >> $GITHUB_OUTPUT
+
+    # - name: Upload firmware to release
+    #   uses: softprops/action-gh-release@master
+    #   if: steps.tag.outputs.status == 'success' && !cancelled()
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #   with:
+    #     tag_name: ${{ steps.tag.outputs.release_tag }}
+    #     body_path: release.txt
+    #     files: ${{ env.FIRMWARE }}/*
+
     - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@v3
+      uses: Mattraks/delete-workflow-runs@main
       with:
         retain_days: 0
         keep_minimum_runs: 2

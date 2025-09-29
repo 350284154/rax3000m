@@ -1,11 +1,10 @@
-#
 # https://github.com/padavanonly/immortalwrt-mt798x-6.6.git
 #
 # File: .github/workflows/openwrt-builder.yml
-# Description: Optimized OpenWrt Build Workflow (Anti-Crash Edition)
+# Description: Ultimate Optimized OpenWrt Build Workflow (Single-Thread, Anti-Crash)
 #
 
-name: OpenWrt Builder (Stable)
+name: OpenWrt Builder (ULTRA-STABLE)
 
 on:
   repository_dispatch:
@@ -22,25 +21,24 @@ env:
   TZ: Asia/Shanghai
   
   # --- 上传/发布控制参数 ---
-  UPLOAD_BIN_DIR: false     # 是否上传整个 bin 目录
-  UPLOAD_FIRMWARE: true     # 是否上传目标固件文件 (targets/*/* 目录)
-  UPLOAD_RELEASE: false     # 关闭自动发布 Release
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: false
   
-  # ⭐ 新增环境变量：设置安全的编译线程数
-  SAFE_THREADS: 2           # 限制在 2 线程，防止 Runner 内存/CPU 耗尽
+  # ⭐ 终极安全设置：将编译线程数设置为 1，防止 Runner 崩溃
+  SAFE_THREADS: 1
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # 增加超时时间，给予 Runner 更多时间重启或恢复
-    timeout-minutes: 420 # 7小时，防止编译大包超时
+    timeout-minutes: 420 # 7小时，留足时间给单线程编译
 
     steps:
     - name: ⬇️ Checkout Repository
       uses: actions/checkout@v4
       
     # ----------------------------------------------------
-    # ⭐ 优化点 1：最大化释放 Runner 上的磁盘/内存空间
+    # ⭐ 资源清理：最大化释放 Runner 上的磁盘/内存空间
     # ----------------------------------------------------
     - name: 🛠️ Initialization and Space Cleanup
       env:
@@ -54,7 +52,6 @@ jobs:
         
         # 优化 apt
         sudo -E apt-get -qq update
-        # 精简核心依赖，使用更稳定的 python3-setuptools
         sudo -E apt-get -qq install build-essential ccache libncurses5-dev libncursesw5-dev \
             gawk git gettext libssl-dev xsltproc rsync wget unzip python3 python3-setuptools \
             python3-distutils file zlib1g-dev device-tree-compiler
@@ -87,10 +84,7 @@ jobs:
     - name: ⚙️ Update & Install feeds
       run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
 
-    # ----------------------------------------------------
-    # ⭐ 优化点 2：在 DIY-P2 阶段强制禁用高负载优化 (LTO/PGO)
-    # ----------------------------------------------------
-    - name: ⚙️ Load custom configuration & DIY Part 2 (Anti-Crash Config)
+    - name: ⚙️ Load custom configuration & DIY Part 2
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
@@ -98,30 +92,39 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # ⬇️ 强制禁用 LTO/PGO 优化，以避免 Runner 内存耗尽导致通信中断
-        echo "Disabling LTO/PGO to prevent Runner crash..."
+        # 运行 make defconfig
+        make defconfig
+
+    # ----------------------------------------------------
+    # ⭐ 强制配置修改：在 make defconfig 之后强制禁用 LTO/PGO
+    # ----------------------------------------------------
+    - name: 💥 Force Disable LTO/PGO (Anti-Crash Measure)
+      run: |
+        cd openwrt
+        echo "Forcibly removing LTO/PGO options from .config to prevent Runner crash..."
+        # 强行删除所有 LTO/PGO 配置项，这是解决通信中断最有效的方法
         sed -i '/CONFIG_PACKAGE_USE_LTO/d' .config
         sed -i '/CONFIG_USE_LTO/d' .config
         sed -i '/CONFIG_USE_PGO/d' .config
         
+        # 重新运行一次 defconfig，以确保配置文件的完整性（虽然通常不需要，但安全起见）
         make defconfig
 
     - name: 📦 Download packages
       id: package
       run: |
         cd openwrt
-        # 保持 -j8 下载以节省时间
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 🚀 Compile the firmware (Using Safe Threads)
+    - name: 🚀 Compile the firmware (Using Single Thread)
       id: compile
-      timeout-minutes: 360 # 6 小时编译时间
+      timeout-minutes: 360
       run: |
         cd openwrt
-        # ⭐ 关键修改：使用 SAFE_THREADS (2 线程) 编译，防止内存耗尽
-        echo -e "Starting stable ${SAFE_THREADS} thread compile..."
-        make -j${SAFE_THREADS} || make -j1 V=s
+        # ⭐ 关键修改：使用 SAFE_THREADS (1 线程) 编译，这是最可靠的模式
+        echo -e "Starting ULTRA-STABLE ${SAFE_THREADS} thread compile..."
+        make -j${SAFE_THREADS} V=s # 使用 V=s 详细日志，方便单线程失败时诊断
         
         # 检查编译是否真的成功
         if [ $? -eq 0 ] && [ -d "bin/targets" ]; then
@@ -146,7 +149,6 @@ jobs:
       if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
       run: |
         FIRMWARE_DIR="openwrt/bin/targets/*/*"
-        # 确保目录存在且删除 packages
         if [ -d "$FIRMWARE_DIR" ]; then
           rm -rf $FIRMWARE_DIR/packages || true
           echo "FIRMWARE=$FIRMWARE_DIR" >> $GITHUB_ENV
@@ -161,8 +163,9 @@ jobs:
       if: steps.organize.outputs.status == 'success'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        # 使用通配符确保上传所有固件文件
-        path: openwrt/bin/targets/*/*/* - name: 🧹 Delete workflow runs
+        path: openwrt/bin/targets/*/*/*
+        
+    - name: 🧹 Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
       with:
         retain_days: 0

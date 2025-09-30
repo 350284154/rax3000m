@@ -1,173 +1,147 @@
-# https://github.com/padavanonly/immortalwrt-mt798x-6.6.git
 #
-# File: .github/workflows/openwrt-builder.yml
-# Description: Ultimate Optimized OpenWrt Build Workflow (Single-Thread, Anti-Crash)
+# https://github.com/P3TERX/Actions-OpenWrt
+#
+# File: .github/workflows/openwrt-bulder.yml
+# Description: Build OpenWrt using GitHub Actions (no auto release)
 #
 
-name: OpenWrt Builder (ULTRA-STABLE)
+name: OpenWrt Builder
 
 on:
   repository_dispatch:
   workflow_dispatch:
 
 env:
-  # --- 编译配置参数 ---
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6.git
   REPO_BRANCH: openwrt-24.10-6.6
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  TZ: Asia/Shanghai
-  
-  # --- 上传/发布控制参数 ---
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
-  
-  # ⭐ 终极安全设置：将编译线程数设置为 1，防止 Runner 崩溃
-  SAFE_THREADS: 1
+  UPLOAD_RELEASE: false     # <--- 这里设为 false，关闭自动发布 Release
+  TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 420 # 7小时，留足时间给单线程编译
 
     steps:
-    - name: ⬇️ Checkout Repository
-      uses: actions/checkout@v4
-      
-    # ----------------------------------------------------
-    # ⭐ 资源清理：最大化释放 Runner 上的磁盘/内存空间
-    # ----------------------------------------------------
-    - name: 🛠️ Initialization and Space Cleanup
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        echo "Starting environment cleanup..."
-        # 彻底清理和释放 Runner 资源
-        sudo swapoff -a
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force || true
-        
-        # 优化 apt
+        sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install build-essential ccache libncurses5-dev libncursesw5-dev \
-            gawk git gettext libssl-dev xsltproc rsync wget unzip python3 python3-setuptools \
-            python3-distutils file zlib1g-dev device-tree-compiler
-        
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
-        
-        # 设置时区和工作目录
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
-        
-    - name: 🔍 Check Initial Disk Space
-      run: df -hT
 
-    - name: ⚙️ Clone source code
+    - name: Clone source code
       working-directory: /workdir
       run: |
-        echo "Cloning $REPO_URL on branch $REPO_BRANCH..."
+        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: ⚙️ Load custom feeds & DIY Part 1
+    - name: Load custom feeds
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
         chmod +x $DIY_P1_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: ⚙️ Update & Install feeds
-      run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
 
-    - name: ⚙️ Load custom configuration & DIY Part 2
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Load custom configuration
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
-        
-        # 运行 make defconfig
-        make defconfig
 
-    # ----------------------------------------------------
-    # ⭐ 强制配置修改：在 make defconfig 之后强制禁用 LTO/PGO
-    # ----------------------------------------------------
-    - name: 💥 Force Disable LTO/PGO (Anti-Crash Measure)
-      run: |
-        cd openwrt
-        echo "Forcibly removing LTO/PGO options from .config to prevent Runner crash..."
-        # 强行删除所有 LTO/PGO 配置项，这是解决通信中断最有效的方法
-        sed -i '/CONFIG_PACKAGE_USE_LTO/d' .config
-        sed -i '/CONFIG_USE_LTO/d' .config
-        sed -i '/CONFIG_USE_PGO/d' .config
-        
-        # 重新运行一次 defconfig，以确保配置文件的完整性（虽然通常不需要，但安全起见）
-        make defconfig
-
-    - name: 📦 Download packages
+    - name: Download package
       id: package
       run: |
         cd openwrt
+        make defconfig
         make download -j8
+        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 🚀 Compile the firmware (Using Single Thread)
+    - name: Compile the firmware
       id: compile
-      timeout-minutes: 360
       run: |
         cd openwrt
-        # ⭐ 关键修改：使用 SAFE_THREADS (1 线程) 编译，这是最可靠的模式
-        echo -e "Starting ULTRA-STABLE ${SAFE_THREADS} thread compile..."
-        make -j${SAFE_THREADS} V=s # 使用 V=s 详细日志，方便单线程失败时诊断
-        
-        # 检查编译是否真的成功
-        if [ $? -eq 0 ] && [ -d "bin/targets" ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-        else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            echo "::error::Compilation failed or target binaries not found."
-            exit 1
-        fi
-        
-        # 提取设备名和生成文件日期
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME || true
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 🔍 Check Final Disk Space
-      if: always()
+    - name: Check space usage
+      if: (!cancelled())
       run: df -hT
 
-    - name: 📂 Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
-      run: |
-        FIRMWARE_DIR="openwrt/bin/targets/*/*"
-        if [ -d "$FIRMWARE_DIR" ]; then
-          rm -rf $FIRMWARE_DIR/packages || true
-          echo "FIRMWARE=$FIRMWARE_DIR" >> $GITHUB_ENV
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          echo "::warning::Target firmware directory not found."
-          echo "status=failure" >> $GITHUB_OUTPUT
-        fi
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
 
-    - name: 📤 Upload firmware artifact
-      uses: actions/upload-artifact@v4
-      if: steps.organize.outputs.status == 'success'
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin/targets/*/*/*
-        
-    - name: 🧹 Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@v2
+        path: ${{ env.FIRMWARE }}
+
+    # 已彻底关闭 Release 步骤
+    # - name: Generate release tag
+    #   id: tag
+    #   if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+    #   run: |
+    #     echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+    #     touch release.txt
+    #     [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
+    #     echo "status=success" >> $GITHUB_OUTPUT
+
+    # - name: Upload firmware to release
+    #   uses: softprops/action-gh-release@master
+    #   if: steps.tag.outputs.status == 'success' && !cancelled()
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #   with:
+    #     tag_name: ${{ steps.tag.outputs.release_tag }}
+    #     body_path: release.txt
+    #     files: ${{ env.FIRMWARE }}/*
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@main
       with:
         retain_days: 0
         keep_minimum_runs: 2
-        delete_run_by_conclusion: success
